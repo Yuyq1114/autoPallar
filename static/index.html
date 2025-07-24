@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8">
+  <title>布料排布可视化</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    body {
+      font-family: sans-serif;
+      margin: 20px;
+    }
+    canvas {
+      border: 1px solid #ccc;
+      margin-bottom: 20px;
+      max-width: 100%;
+    }
+    #summary, .fabric-stats {
+      margin: 10px 0;
+      padding: 10px;
+      background-color: #f0f8ff;
+      border-left: 5px solid #1890ff;
+    }
+    .material-title {
+      font-weight: bold;
+      margin-top: 20px;
+      font-size: 18px;
+    }
+    .fabric-stats {
+      margin-bottom: 5px;
+    }
+  </style>
+</head>
+<body>
+<h1>布料排布可视化</h1>
+<button id="fetchBtn">加载排布结果</button>
+
+<div id="summary"></div>
+<div id="canvasContainer"></div>
+
+<script>
+  const canvasMaxWidth = 1000;
+
+  function drawLayout(data) {
+    const container = document.getElementById('canvasContainer');
+    const summaryDiv = document.getElementById('summary');
+    container.innerHTML = '';
+    summaryDiv.innerHTML = '';
+
+    // 全局统计
+    const s = data.summary;
+    summaryDiv.innerHTML = `
+      <div><strong>总使用面积：</strong> ${s.totalUsedArea.toFixed(1)} cm²</div>
+      <div><strong>总布料面积：</strong> ${s.totalArea.toFixed(1)} cm²</div>
+      <div><strong>总浪费面积：</strong> ${s.totalWasteArea.toFixed(1)} cm²</div>
+      <div><strong>整体利用率：</strong> ${(s.overallRate * 100).toFixed(2)}%</div>
+    `;
+
+    Object.entries(data.materials).forEach(([material, statsList]) => {
+      const title = document.createElement('div');
+      title.className = 'material-title';
+      title.textContent = `材质：${material || '未知'}`;
+      container.appendChild(title);
+
+      statsList.forEach(fabric => {
+        const info = document.createElement('div');
+        info.className = 'fabric-stats';
+        info.innerHTML = `
+          <div><strong>布料编号：</strong> ${fabric.fabricIndex}</div>
+          <div><strong>布料宽度：</strong> ${fabric.fabricWidth} cm</div>
+          <div><strong>使用面积：</strong> ${fabric.usedArea.toFixed(1)} cm²</div>
+          <div><strong>浪费面积：</strong> ${fabric.wasteArea.toFixed(1)} cm²</div>
+          <div><strong>利用率：</strong> ${(fabric.usageRate * 100).toFixed(2)}%</div>
+        `;
+        container.appendChild(info);
+
+        const items = Array.isArray(fabric.placedOrders) ? fabric.placedOrders : [];
+        const scale = canvasMaxWidth / fabric.fabricWidth;
+        const maxY = Math.max(0, ...items.map(i => i.y + i.length));
+        const canvasHeight = maxY * scale + 40;
+
+        const canvas = document.createElement('canvas');
+        canvas.width = canvasMaxWidth;
+        canvas.height = canvasHeight;
+        const ctx = canvas.getContext('2d');
+
+        ctx.fillStyle = "#f5f5f5";
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+        ctx.font = "12px sans-serif";
+        ctx.fillStyle = "black";
+        ctx.fillText(`布料 ${fabric.fabricIndex}（${fabric.fabricWidth}cm）`, 10, 15);
+
+        items.forEach(order => {
+          const x = order.x * scale;
+          const y = order.y * scale + 20;
+          const w = order.width * scale;
+          const h = order.length * scale;
+
+          ctx.fillStyle = randomColor(order.remark);
+          ctx.fillRect(x, y, w, h);
+
+          ctx.strokeStyle = "black";
+          ctx.strokeRect(x, y, w, h);
+
+          ctx.fillStyle = "black";
+          ctx.font = "10px sans-serif";
+
+          const label = `${order.remark}\n${order.width}×${order.length}`;
+          drawWrappedText(ctx, label, x + 2, y + 12, w - 4, 12);
+        });
+
+
+        container.appendChild(canvas);
+      });
+    });
+  }
+  function drawWrappedText(ctx, text, x, y, maxWidth, lineHeight) {
+    const words = text.split(/[\s\n]/);
+    let line = '';
+    for (let n = 0; n < words.length; n++) {
+      const testLine = line + words[n] + ' ';
+      const metrics = ctx.measureText(testLine);
+      if (metrics.width > maxWidth && n > 0) {
+        ctx.fillText(line, x, y);
+        line = words[n] + ' ';
+        y += lineHeight;
+      } else {
+        line = testLine;
+      }
+    }
+    ctx.fillText(line, x, y);
+  }
+
+  function randomColor(str) {
+    let hash = 0;
+    for (let i = 0; i < str.length; i++) {
+      hash = str.charCodeAt(i) + ((hash << 5) - hash);
+    }
+    return `hsl(${hash % 360}, 60%, 75%)`;
+  }
+
+  document.getElementById('fetchBtn').addEventListener('click', () => {
+    const btn = document.getElementById('fetchBtn');
+    btn.disabled = true;
+    btn.textContent = '加载中...';
+    fetch('/layout', { method: 'POST' })
+            .then(res => res.json())
+            .then(data => {
+              drawLayout(data);
+              btn.disabled = false;
+              btn.textContent = '加载排布结果';
+            })
+            .catch(err => {
+              alert("请求失败: " + err);
+              btn.disabled = false;
+              btn.textContent = '加载排布结果';
+            });
+  });
+</script>
+</body>
+</html>
