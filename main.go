@@ -4,10 +4,14 @@ package main
 import (
 	"fmt"
 	"github.com/gin-gonic/gin"
+	"github.com/go-echarts/go-echarts/v2/charts"
+	"github.com/go-echarts/go-echarts/v2/components"
+	"github.com/go-echarts/go-echarts/v2/opts"
 	"github.com/xuri/excelize/v2"
 	"log"
 	"math"
 	"net/http"
+	"os"
 	"regexp"
 	"sort"
 	"strconv"
@@ -232,12 +236,12 @@ func extractSize(text string) (float64, float64, bool) {
 	return 0, 0, false
 }
 
-func ReadExcel(filePath string, column string) ([]Order, error) {
+func ReadExcel(filePath string, column string, Sheet int) ([]Order, error) {
 	f, err := excelize.OpenFile(filePath)
 	if err != nil {
 		return nil, err
 	}
-	sheet := f.GetSheetName(0)
+	sheet := f.GetSheetName(Sheet)
 	rows, err := f.GetRows(sheet)
 	if err != nil {
 		return nil, err
@@ -289,39 +293,44 @@ func ReadExcel(filePath string, column string) ([]Order, error) {
 }
 
 func handleLayout(c *gin.Context) {
-	orders, err := ReadExcel(`C:\Users\31178\Desktop\zhubu.xlsx`, "卖家备注")
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
+	result := LayoutResult{}
+	var resultTotal []GlobalStats
+	for i := 0; i < 30; i++ {
+		orders, err := ReadExcel(`系统定制成本6月.xlsx`, "卖家备注", i)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		//var orders []Order
+		//order := Order{
+		//	Material: "PVC",
+		//	Remark:   "<UNK>",
+		//	Width:    155,
+		//	Length:   2800,
+		//}
+		//orders = append(orders, order)
+		//order = Order{
+		//	Material: "PVC",
+		//	Remark:   "<UNK>",
+		//	Width:    135,
+		//	Length:   2800,
+		//}
+		//orders = append(orders, order)
+		//order = Order{
+		//	Material: "PVC",
+		//	Remark:   "<UNK>",
+		//	Width:    175,
+		//	Length:   2800,
+		//}
+		//orders = append(orders, order)
+		orders = orders[:35]
+		result = FindBestLayout(orders, []float64{140, 160, 180}, 3000, 0.4)
+		resultTotal = append(resultTotal, result.Summary)
+		//result := ArrangeOrdersWithMaxRects(orders, []float64{140, 160, 180}, 3000, 0.4)
+		//result := ArrangeOrdersWithMaxRects(orders, []float64{160, 180, 140}, 3000, 0.4)
+		//result := ArrangeOrdersWithMaxRects(orders, []float64{180, 140, 160}, 3000, 0.4)
 	}
-	//var orders []Order
-	//order := Order{
-	//	Material: "PVC",
-	//	Remark:   "<UNK>",
-	//	Width:    155,
-	//	Length:   2800,
-	//}
-	//orders = append(orders, order)
-	//order = Order{
-	//	Material: "PVC",
-	//	Remark:   "<UNK>",
-	//	Width:    135,
-	//	Length:   2800,
-	//}
-	//orders = append(orders, order)
-	//order = Order{
-	//	Material: "PVC",
-	//	Remark:   "<UNK>",
-	//	Width:    175,
-	//	Length:   2800,
-	//}
-	//orders = append(orders, order)
-
-	result := FindBestLayout(orders, []float64{140, 160, 180}, 3000, 0.4)
-
-	//result := ArrangeOrdersWithMaxRects(orders, []float64{140, 160, 180}, 3000, 0.4)
-	//result := ArrangeOrdersWithMaxRects(orders, []float64{160, 180, 140}, 3000, 0.4)
-	//result := ArrangeOrdersWithMaxRects(orders, []float64{180, 140, 160}, 3000, 0.4)
+	lineChart(resultTotal, "line3.html")
 	c.JSON(http.StatusOK, result)
 }
 func permuteFabricWidths(input []float64) [][]float64 {
@@ -357,7 +366,110 @@ func FindBestLayout(orders []Order, fabricWidths []float64, fabricLength, gap fl
 	}
 	return best
 }
+func lineChart(resultTotal []GlobalStats, outHTML string) error {
+	if len(resultTotal) == 0 {
+		return fmt.Errorf("resultTotal is empty")
+	}
 
+	xAxis := make([]string, len(resultTotal))
+	usedArea := make([]opts.LineData, len(resultTotal))
+	rates := make([]opts.LineData, len(resultTotal))
+
+	var sumUsed, sumWaste float64
+	for i, gs := range resultTotal {
+		xAxis[i] = fmt.Sprintf("Day %d", i+1)
+		usedArea[i] = opts.LineData{Value: gs.TotalUsedArea}
+		rates[i] = opts.LineData{Value: gs.OverallRate * 100.0}
+
+		sumUsed += gs.TotalUsedArea
+		if gs.TotalWasteArea > 0 {
+			sumWaste += gs.TotalWasteArea
+		} else if gs.TotalArea > 0 {
+			sumWaste += (gs.TotalArea - gs.TotalUsedArea)
+		}
+	}
+
+	// 1) 使用面积
+	lineUsed := charts.NewLine()
+	lineUsed.SetGlobalOptions(
+		charts.WithTitleOpts(opts.Title{
+			Title:    "每日使用面积",
+			Subtitle: "单位：cm²",
+		}),
+		charts.WithTooltipOpts(opts.Tooltip{
+			Trigger: "axis",
+		}),
+		charts.WithLegendOpts(opts.Legend{}),
+		charts.WithDataZoomOpts(opts.DataZoom{
+			Type:  "slider",
+			Start: 0,
+			End:   100,
+		}),
+	)
+	lineUsed.SetXAxis(xAxis).
+		AddSeries("使用面积 (cm²)", usedArea).
+		SetSeriesOptions(charts.WithLineChartOpts(opts.LineChart{Smooth: opts.Bool(true)}))
+
+	// 2) 利用率
+	lineRate := charts.NewLine()
+	lineRate.SetGlobalOptions(
+		charts.WithTitleOpts(opts.Title{
+			Title:    "每日利用率",
+			Subtitle: "单位：%",
+		}),
+		charts.WithTooltipOpts(opts.Tooltip{
+			Trigger: "axis",
+		}),
+		charts.WithLegendOpts(opts.Legend{}),
+		charts.WithYAxisOpts(opts.YAxis{
+			Name: "利用率(%)",
+			AxisLabel: &opts.AxisLabel{
+				Formatter: "{value} %",
+			},
+		}),
+		charts.WithDataZoomOpts(opts.DataZoom{
+			Type:  "slider",
+			Start: 0,
+			End:   100,
+		}),
+	)
+	lineRate.SetXAxis(xAxis).
+		AddSeries("利用率 (%)", rates).
+		SetSeriesOptions(charts.WithLineChartOpts(opts.LineChart{Smooth: opts.Bool(true)}))
+
+	// 3) 饼图
+	pie := charts.NewPie()
+	pie.SetGlobalOptions(
+		charts.WithTitleOpts(opts.Title{
+			Title: "总面积构成（使用 vs 浪费）",
+		}),
+		charts.WithTooltipOpts(opts.Tooltip{}),
+		charts.WithLegendOpts(opts.Legend{}),
+	)
+	pieData := []opts.PieData{
+		{Name: "使用面积", Value: sumUsed},
+		{Name: "浪费面积", Value: sumWaste},
+	}
+	pie.AddSeries("面积分布", pieData).
+		SetSeriesOptions(
+			charts.WithPieChartOpts(opts.PieChart{
+				Radius: []string{"40%", "70%"},
+			}),
+			charts.WithLabelOpts(opts.Label{
+				Formatter: "{b}: {d}%",
+			}),
+		)
+
+	page := components.NewPage()
+	page.AddCharts(lineUsed, lineRate, pie)
+
+	f, err := os.Create(outHTML)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	return page.Render(f)
+}
 func main() {
 	r := gin.Default()
 	r.POST("/layout", handleLayout)
